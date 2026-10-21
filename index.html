@@ -1,71 +1,252 @@
+
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#10131b">
-  <meta name="description" content="ClipForge AI helps creators find promising short-form clips from timestamped transcripts.">
-  <title>ClipForge AI — Find your next clip</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#10111a">
+  <meta name="description" content="ClipForge AI helps creators find promising short-form clips from timestamped transcripts. Free browser-based workflow.">
+  <title>ClipForge AI — Clip Studio</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="#" aria-label="ClipForge AI home"><span class="brand-mark">CF</span><span>ClipForge <b>AI</b></span></a>
-    <span class="status"><i></i> MVP · Runs in your browser</span>
-  </header>
+  <div class="shell">
 
-  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="ClipForge AI home">
+        <span class="brand-mark">CF</span>
+        <span>
+          ClipForge <b>AI</b>
+          <small>CLIP STUDIO · FREE MVP</small>
+        </span>
+      </a>
+      <button id="saveProjectBtn" class="button button-quiet" type="button">
+        Save project
+      </button>
+    </header>
+
     <section class="hero">
-      <div class="eyebrow">YOUR SHORT-FORM WORKFLOW, STARTS HERE</div>
-      <h1>Turn long conversations<br><span>into standout clips.</span></h1>
-      <p>Paste a timestamped transcript. ClipForge finds promising moments and drafts hooks, titles, and captions — without a paid AI API.</p>
+      <div class="eyebrow">
+        <span class="pulse"></span>
+        YOUR SHORT-FORM WORKFLOW
+      </div>
+
+      <h1>
+        Find the moment.<br>
+        <span>Forge the clip.</span>
+      </h1>
+
+      <p>
+        Turn a timestamped transcript into ranked clip ideas,
+        hooks, titles, and captions — right in your browser.
+        No paid AI API required.
+      </p>
+
+      <div class="hero-tags">
+        <span>↗ Transcript analysis</span>
+        <span>◷ Timestamp-aware</span>
+        <span>▣ Local-first</span>
+      </div>
     </section>
 
-    <section class="panel input-panel">
-      <div class="section-heading">
-        <div><span class="step">01</span><h2>Source transcript</h2></div>
-        <button id="loadSample" class="button button-quiet" type="button">Load sample</button>
-      </div>
-      <label for="transcript">Paste transcript with timestamps</label>
-      <textarea id="transcript" spellcheck="false" placeholder="[00:00] Most people think getting better is about motivation.&#10;[00:08] But the real secret is making the habit easier to repeat.&#10;[00:17] Here's the mistake I made for three years..."></textarea>
-      <div class="hint">Accepted examples: <code>[00:12] text</code>, <code>00:12 - text</code>, or <code>00:01:12 text</code>. One timestamp per line works best.</div>
-      <div class="controls">
-        <div class="field-group">
-          <label for="duration">Target clip length</label>
-          <select id="duration">
-            <option value="20">15–25 seconds</option>
-            <option value="35" selected>25–45 seconds</option>
-            <option value="55">45–60 seconds</option>
-          </select>
+    <main>
+
+      <!-- STEP 01: TRANSCRIPT INPUT -->
+      <section class="panel">
+
+        <div class="section-heading">
+          <div>
+            <span class="step">01</span>
+            <h2>Source transcript</h2>
+          </div>
+          <span class="muted small">Paste or import</span>
         </div>
-        <div class="field-group">
-          <label for="platform">Main platform</label>
-          <select id="platform">
-            <option value="TikTok">TikTok</option>
-            <option value="YouTube Shorts">YouTube Shorts</option>
-            <option value="Instagram Reels">Instagram Reels</option>
-          </select>
+
+        <div class="field">
+          <label for="projectName">
+            Project name <span class="muted">(optional)</span>
+          </label>
+          <input
+            id="projectName"
+            type="text"
+            maxlength="90"
+            placeholder="e.g. Podcast episode 12"
+          >
         </div>
-      </div>
-      <button id="analyze" class="button button-primary button-wide" type="button"><span>✦</span> Find clip opportunities</button>
-      <p id="error" class="error" role="alert" hidden></p>
-    </section>
 
-    <section id="resultsSection" class="results-section" hidden>
-      <div class="results-heading">
-        <div><span class="step">02</span><h2>Clip opportunities</h2><p id="resultSummary">Ranked suggestions from your transcript.</p></div>
-        <button id="export" class="button button-secondary" type="button">Export JSON ↗</button>
-      </div>
-      <div id="results" class="results-grid"></div>
-      <p class="disclaimer">Scores are heuristic estimates based on wording and structure — not predictions of views or virality. Review the original video before publishing.</p>
-    </section>
+        <div class="import-row">
+          <label
+            class="button button-secondary file-button"
+            for="transcriptFile"
+          >
+            Import SRT / VTT / TXT
+          </label>
 
-    <section class="how panel">
-      <div class="how-icon">✦</div>
-      <div><h3>What this MVP does</h3><p>It uses local, rule-based text analysis to identify hooks, questions, emotional language, and story cues. Your transcript stays in this browser tab; it is not sent to a server.</p></div>
-    </section>
-    <footer>ClipForge AI <span>·</span> Built for creators <span>·</span> Free MVP</footer>
-  </main>
+          <input
+            id="transcriptFile"
+            type="file"
+            accept=".srt,.vtt,.txt,text/plain"
+          >
+
+          <button
+            id="sampleBtn"
+            class="button button-quiet"
+            type="button"
+          >
+            Load sample
+          </button>
+
+          <span
+            id="fileStatus"
+            class="muted small"
+            aria-live="polite"
+          ></span>
+        </div>
+
+        <div class="field">
+          <label for="transcript">Transcript with timestamps</label>
+
+          <textarea
+            id="transcript"
+            rows="9"
+            spellcheck="false"
+            placeholder="[00:12] The first thing nobody tells you is...
+00:18 - You have to make the opening interesting.
+00:01:05 Another useful moment starts here."
+          ></textarea>
+
+          <div class="helper">
+            Supports [00:12], 00:12 - text, 00:01:12 text,
+            SRT and WebVTT. One timestamp per line works best.
+          </div>
+        </div>
+
+        <div class="settings-grid">
+
+          <div class="field">
+            <label for="clipLength">Target clip length</label>
+            <select id="clipLength">
+              <option value="20">15–25 seconds</option>
+              <option value="30" selected>25–35 seconds</option>
+              <option value="45">35–50 seconds</option>
+              <option value="60">50–60 seconds</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="platform">Main platform</label>
+            <select id="platform">
+              <option value="YouTube Shorts">YouTube Shorts</option>
+              <option value="TikTok">TikTok</option>
+              <option value="Instagram Reels">Instagram Reels</option>
+              <option value="All platforms">All platforms</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="maxClips">Ideas to return</label>
+            <select id="maxClips">
+              <option value="3">3 ideas</option>
+              <option value="5" selected>5 ideas</option>
+              <option value="8">8 ideas</option>
+            </select>
+          </div>
+
+        </div>
+
+        <button
+          id="analyzeBtn"
+          class="button button-primary button-wide"
+          type="button"
+        >
+          <span>✦</span> Find clip opportunities
+        </button>
+
+        <p id="status" class="status" role="status" aria-live="polite">
+          Your transcript stays in this browser. Nothing is uploaded.
+        </p>
+
+      </section>
+
+      <!-- STEP 02: RESULTS -->
+      <section class="panel results-panel">
+
+        <div class="section-heading">
+          <div>
+            <span class="step">02</span>
+            <h2>Clip opportunities</h2>
+          </div>
+
+          <div class="result-actions">
+            <button
+              id="exportBtn"
+              class="button button-secondary"
+              type="button"
+              disabled
+            >
+              Export JSON ↗
+            </button>
+          </div>
+        </div>
+
+        <div id="emptyState" class="empty-state">
+          <div class="empty-icon">✦</div>
+          <h3>Your next clip starts here</h3>
+          <p>
+            Import a transcript or load the sample, then run the
+            analysis to get ranked moments.
+          </p>
+        </div>
+
+        <div id="results" class="results-list"></div>
+
+        <div class="notice">
+          <strong>Important:</strong>
+          Scores are heuristic estimates based on wording and structure,
+          not predictions of views or virality. Check each timestamp
+          against the original video before publishing.
+        </div>
+
+      </section>
+
+      <!-- STEP 03: SAVED PROJECTS -->
+      <section class="panel project-panel">
+
+        <div class="section-heading">
+          <div>
+            <span class="step">03</span>
+            <h2>Local projects</h2>
+          </div>
+
+          <button
+            id="clearProjectsBtn"
+            class="text-button"
+            type="button"
+          >
+            Clear saved projects
+          </button>
+        </div>
+
+        <p class="muted small">
+          Projects are stored only in this browser on this device.
+          Clearing browser data may remove them.
+        </p>
+
+        <div id="savedProjects" class="saved-projects">
+          <p class="muted small">No saved projects yet.</p>
+        </div>
+
+      </section>
+
+    </main>
+
+    <footer>
+      <span class="brand-footer">CF <b>ClipForge AI</b></span>
+      <span>Built for creators · Free MVP · Local-first</span>
+    </footer>
+
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>
