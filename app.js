@@ -1,183 +1,275 @@
 (() => {
+  "use strict";
   const $ = (id) => document.getElementById(id);
-  const transcriptEl = $("transcript");
-  const resultsEl = $("results");
+  const els = {
+    name: $("projectName"), transcript: $("transcript"), file: $("transcriptFile"),
+    fileStatus: $("fileStatus"), clipLength: $("clipLength"), platform: $("platform"),
+    maxClips: $("maxClips"), analyze: $("analyzeBtn"), status: $("status"),
+    results: $("results"), empty: $("emptyState"), export: $("exportBtn"),
+    sample: $("sampleBtn"), save: $("saveProjectBtn"), projects: $("savedProjects"),
+    clear: $("clearProjectsBtn")
+  };
+  const STORAGE_KEY = "clipforge_ai_projects_v2";
   let latestResults = [];
+  let latestMeta = {};
 
-  const sample = `[00:00] Most people think getting better is about motivation.
-[00:05] But motivation disappears the moment your day gets difficult.
-[00:10] The real secret is making the habit easier to repeat.
-[00:16] Here's the mistake I made for three years: I tried to change everything at once.
-[00:23] I bought the equipment, made a huge plan, and expected a perfect week.
-[00:30] Then one bad day made me quit completely.
-[00:35] What finally worked was starting so small it felt almost silly.
-[00:41] Ten minutes a day beat three hours once a month.
-[00:47] If you're trying to build a skill, make it easy to show up tomorrow.
-[00:54] That's how consistency starts to compound.`;
+  const sampleText = `[00:00] Most people think going viral is about having the best camera, but that's not really it.
+[00:06] The biggest mistake creators make is waiting until they feel ready.
+[00:12] Let me tell you the one change that made the biggest difference for me.
+[00:18] I stopped trying to make every video perfect and started testing one idea every day.
+[00:25] And here's the surprising part: the videos I spent the least time overthinking often performed better.
+[00:33] If you're starting from zero, focus on the first three seconds. Give people a reason to stop scrolling.
+[00:41] One clear promise is stronger than five different ideas fighting for attention.
+[00:48] So before you post your next video, ask yourself this: would I stop scrolling for this opening?
+[00:56] That single question changed how I write every hook.`;
 
-  const hookWords = ["secret", "mistake", "nobody", "never", "always", "truth", "why", "how", "stop", "instead", "finally", "the problem", "here's", "here is", "what if", "imagine", "because", "learned", "three years", "wrong"];
-  const emotionWords = ["love", "hate", "fear", "scared", "crazy", "amazing", "terrible", "fail", "failed", "success", "surprise", "shocking", "angry", "worst", "best", "regret", "dream", "pain", "happy", "sad"];
-  const storyWords = ["story", "mistake", "then", "finally", "until", "because", "lesson", "learned", "changed", "worked", "problem", "solution", "result"];
-  const questionWords = ["why", "how", "what", "when", "where", "who", "if"];
-
-  function toSeconds(stamp) {
-    const parts = stamp.split(":").map(Number);
-    if (parts.some(n => !Number.isFinite(n))) return null;
+  function setStatus(message, isError = false) {
+    els.status.textContent = message;
+    els.status.classList.toggle("error", isError);
+  }
+  function timeToSeconds(value) {
+    const clean = value.replace(/[\[\]()]/g, "").trim();
+    const parts = clean.split(":").map(Number);
+    if (!parts.length || parts.some(n => !Number.isFinite(n))) return null;
     if (parts.length === 2) return parts[0] * 60 + parts[1];
     if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
     return null;
   }
-  function fmt(sec) {
-    sec = Math.max(0, Math.round(sec));
-    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-    return h ? `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}` : `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+  function formatTime(seconds) {
+    seconds = Math.max(0, Math.floor(seconds));
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return h ? `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}` : `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
   }
+  function stripTags(s) { return s.replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").trim(); }
+
   function parseTranscript(raw) {
-    const lines = raw.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-    const out = [];
-    for (const line of lines) {
-      const match = line.match(/^\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?\s*(?:[-–—|]\s*)?(.*)$/);
-      if (!match || !match[2].trim()) continue;
-      const seconds = toSeconds(match[1]);
-      if (seconds !== null) out.push({ time: seconds, text: match[2].trim() });
-    }
-    return out.sort((a,b) => a.time - b.time);
-  }
-  function countHits(text, words) {
-    const low = text.toLowerCase();
-    return words.reduce((n, word) => n + (low.includes(word) ? 1 : 0), 0);
-  }
-  function scoreSegment(text, duration) {
-    const low = text.toLowerCase();
-    let score = 38;
-    score += Math.min(18, countHits(low, hookWords) * 6);
-    score += Math.min(12, countHits(low, emotionWords) * 4);
-    score += Math.min(12, countHits(low, storyWords) * 3);
-    if (/[?؟]/.test(text) || countHits(low, questionWords) > 0) score += 7;
-    if (/\b(but|however|instead|until|then|because|so)\b/i.test(text)) score += 5;
-    if (/\b(you|your|we|I|my)\b/i.test(text)) score += 3;
-    if (text.length > 100 && text.length < 420) score += 5;
-    if (text.length < 55) score -= 8;
-    if (duration < 12 || duration > 75) score -= 8;
-    return Math.max(25, Math.min(96, score));
-  }
-  function makeHook(text) {
-    const clean = text.replace(/^[\s"'“”]+|[\s"'“”]+$/g, "").replace(/[.!?؟]+$/,"");
-    const lower = clean.toLowerCase();
-    if (lower.includes("mistake")) return "The mistake that changed everything";
-    if (lower.includes("secret")) return "The secret most people overlook";
-    if (lower.includes("why")) return "Here's why this matters";
-    if (lower.includes("how")) return "How to get better without overcomplicating it";
-    if (lower.includes("nobody")) return "What nobody tells you about this";
-    if (lower.includes("finally") || lower.includes("worked")) return "What finally worked for me";
-    const short = clean.split(/\s+/).slice(0, 7).join(" ");
-    return short.length > 8 ? `${short}…` : "The lesson I wish I knew earlier";
-  }
-  function makeTitle(text, index) {
-    const low = text.toLowerCase();
-    if (low.includes("mistake")) return "The mistake that holds people back";
-    if (low.includes("motivation")) return "Why motivation isn't enough";
-    if (low.includes("secret")) return "The simple secret to consistency";
-    if (low.includes("three years") || low.includes("3 years")) return "A lesson learned the hard way";
-    if (low.includes("ten minutes") || low.includes("10 minutes")) return "Small habits beat big plans";
-    if (low.includes("if you're") || low.includes("if you are")) return "A reminder for anyone learning";
-    return ["One idea worth remembering", "A lesson you can use today", "The part people often miss"][index % 3];
-  }
-  function makeCaption(title, platform) {
-    const tags = platform === "TikTok" ? "#LearnOnTikTok #Mindset #CreatorTips" : platform === "Instagram Reels" ? "#Reels #Mindset #PersonalGrowth" : "#Shorts #Mindset #PersonalGrowth";
-    return `${title}. Save this for later and share it with someone who needs the reminder. ${tags}`;
-  }
-  function buildCandidates(rows, target) {
-    const candidates = [];
-    const minLen = Math.max(12, target - 12), maxLen = target + 12;
-    for (let start = 0; start < rows.length; start++) {
-      let best = null;
-      for (let end = start + 1; end < rows.length; end++) {
-        const duration = rows[end].time - rows[start].time;
-        if (duration > maxLen) break;
-        if (duration < minLen) continue;
-        const text = rows.slice(start, end + 1).map(r => r.text).join(" ");
-        const score = scoreSegment(text, duration);
-        const candidate = { start: rows[start].time, end: rows[end].time, duration, text, score };
-        if (!best || score > best.score) best = candidate;
+    const lines = raw.replace(/\r/g, "").split("\n");
+    const entries = [];
+    let pendingSrtTime = null;
+    for (const original of lines) {
+      const line = original.trim();
+      if (!line) continue;
+      if (/^(WEBVTT|NOTE\b|STYLE\b|REGION\b)/i.test(line)) continue;
+      if (/^\d+$/.test(line)) continue;
+      const srt = line.match(/^(\d{2,}:\d{2}(?::\d{2})?[,.]\d{3})\s*-->\s*(\d{2,}:\d{2}(?::\d{2})?[,.]\d{3})/);
+      if (srt) {
+        const start = timeToSeconds(srt[1].replace(",", ".").split(".")[0]);
+        pendingSrtTime = start;
+        continue;
       }
-      if (best) candidates.push(best);
+      let match = line.match(/^\[?(\d{1,}:\d{2}(?::\d{2})?)\]?\s*(?:[-–—|:]\s*)?(.*)$/);
+      if (match && match[2].trim()) {
+        const start = timeToSeconds(match[1]);
+        if (start !== null) entries.push({ time: start, text: stripTags(match[2]) });
+        pendingSrtTime = null;
+        continue;
+      }
+      if (pendingSrtTime !== null) {
+        entries.push({ time: pendingSrtTime, text: stripTags(line) });
+        pendingSrtTime = null;
+      } else if (entries.length) {
+        entries[entries.length - 1].text += " " + stripTags(line);
+      } else {
+        // Keep untimed lines available but flag that timestamps are missing.
+        entries.push({ time: 0, text: stripTags(line), untimed: true });
+      }
     }
-    candidates.sort((a,b) => b.score - a.score);
-    const selected = [];
-    for (const c of candidates) {
-      const overlaps = selected.some(s => c.start < s.end && c.end > s.start);
-      if (!overlaps) selected.push(c);
-      if (selected.length >= 6) break;
+    return entries.filter(e => e.text && e.text.length > 1).sort((a,b) => a.time - b.time);
+  }
+
+  const terms = {
+    question: /\?|\b(what|why|how|who|when|where|which|ever wondered|ask yourself)\b/i,
+    emotion: /\b(shocking|surprising|scary|crazy|love|hate|fear|mistake|fail|win|changed|secret|worst|best|amazing|terrible|never|nobody|everyone|finally|breakthrough)\b/i,
+    hook: /\b(here'?s|this is|the truth|the biggest|one thing|let me tell you|listen|stop|if you|most people|nobody tells you|the reason)\b/i,
+    payoff: /\b(because|so|that means|the result|which is why|in the end|here'?s why|that'?s how|lesson|changed)\b/i,
+    number: /\b\d+\b/
+  };
+  function scoreText(text, duration, target) {
+    const words = text.trim().split(/\s+/).filter(Boolean);
+    const sentenceCount = (text.match(/[.!?]+/g) || []).length;
+    let score = 35;
+    if (terms.question.test(text)) score += 10;
+    if (terms.emotion.test(text)) score += 13;
+    if (terms.hook.test(text)) score += 15;
+    if (terms.payoff.test(text)) score += 8;
+    if (terms.number.test(text)) score += 4;
+    if (sentenceCount >= 1 && sentenceCount <= 4) score += 5;
+    if (words.length >= 18 && words.length <= 95) score += 8;
+    if (words.length < 8) score -= 13;
+    if (words.length > 130) score -= 10;
+    if (duration > target * 1.5) score -= 10;
+    if (duration > 0 && duration < 10) score -= 5;
+    return Math.max(20, Math.min(96, Math.round(score)));
+  }
+  function titleFor(text) {
+    const cleaned = text.replace(/\s+/g," ").trim();
+    const first = cleaned.split(/[.!?]/)[0].trim();
+    let title = first.length > 68 ? first.slice(0,65).replace(/\s+\S*$/,"") + "…" : first;
+    if (!title || title.length < 8) title = cleaned.slice(0,64);
+    return title.replace(/^["'“”]+|["'“”]+$/g,"");
+  }
+  function hookFor(text) {
+    const t = text.replace(/\s+/g," ").trim();
+    if (/\b(if you|when you|before you)\b/i.test(t)) return "Before you scroll, hear this: " + shorten(t, 90);
+    if (/\?/.test(t)) return shorten(t, 105);
+    if (/\b(mistake|wrong|worst|never)\b/i.test(t)) return "The mistake most people miss: " + shorten(t, 78);
+    if (/\b(surprising|secret|nobody|truth|biggest)\b/i.test(t)) return "Nobody talks about this enough: " + shorten(t, 78);
+    return "Here's the key takeaway: " + shorten(t, 82);
+  }
+  function shorten(s, n) { return s.length > n ? s.slice(0,n-1).replace(/\s+\S*$/,"") + "…" : s; }
+  function captionFor(title, platform) {
+    const tag = platform === "YouTube Shorts" ? "#Shorts" : platform === "Instagram Reels" ? "#Reels" : platform === "TikTok" ? "#TikTok" : "#Shorts #Reels";
+    return `${title}\n\nWhat do you think? Share your take below.\n\n${tag} #CreatorTips`;
+  }
+
+  function findCandidates(entries, target, maxClips, platform) {
+    const candidates = [];
+    for (let i = 0; i < entries.length; i++) {
+      const start = entries[i].time;
+      if (entries[i].untimed) continue;
+      let endIndex = i + 1;
+      while (endIndex < entries.length && entries[endIndex].time - start < target) endIndex++;
+      endIndex = Math.min(entries.length, endIndex);
+      let end = endIndex < entries.length ? entries[endIndex].time : start + target;
+      if (end <= start) end = start + target;
+      const chosen = entries.slice(i, endIndex);
+      const text = chosen.map(e => e.text).join(" ").replace(/\s+/g," ").trim();
+      if (text.split(/\s+/).length < 7) continue;
+      const duration = Math.max(1, end - start);
+      let score = scoreText(text, duration, target);
+      // Favor self-contained passages with an opening cue and a concluding cue.
+      if (chosen.length >= 2) score += 2;
+      if (/[.!?]["')\]]?$/.test(text)) score += 2;
+      score = Math.min(98, score);
+      candidates.push({ start, end, duration, text, score, title: titleFor(text), hook: hookFor(text), caption: captionFor(titleFor(text), platform) });
     }
-    return selected.sort((a,b) => b.score - a.score);
+    candidates.sort((a,b) => b.score - a.score || a.start - b.start);
+    const picked = [];
+    for (const item of candidates) {
+      const overlaps = picked.some(p => item.start < p.end && item.end > p.start);
+      if (!overlaps) picked.push(item);
+      if (picked.length >= maxClips) break;
+    }
+    return picked.sort((a,b) => b.score - a.score);
   }
-  function escapeHtml(str) {
-    return String(str).replace(/[&<>"']/g, ch => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
+
+  function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
   }
-  function render(results) {
-    resultsEl.innerHTML = "";
-    const platform = $("platform").value;
-    results.forEach((item, i) => {
+  function renderResults(results) {
+    latestResults = results;
+    els.results.innerHTML = "";
+    els.empty.hidden = results.length > 0;
+    els.export.disabled = results.length === 0;
+    if (!results.length) return;
+    results.forEach((item, index) => {
       const card = document.createElement("article");
       card.className = "clip-card";
-      const hook = makeHook(item.text);
-      const title = makeTitle(item.text, i);
-      const caption = makeCaption(title, platform);
       card.innerHTML = `
-        <div class="clip-top"><span class="clip-number">CLIP ${String(i+1).padStart(2,"0")}</span><span class="score">${item.score}/100 score</span></div>
-        <h3>${escapeHtml(title)}</h3>
-        <div class="time">◷ ${fmt(item.start)} – ${fmt(item.end)} · ${Math.round(item.duration)} sec</div>
-        <p class="clip-text">${escapeHtml(item.text)}</p>
-        <div class="draft"><label>SUGGESTED HOOK</label><p>${escapeHtml(hook)}</p></div>
-        <div class="draft"><label>CAPTION · ${escapeHtml(platform.toUpperCase())}</label><p>${escapeHtml(caption)}</p></div>
-        <div class="card-actions"><button class="button button-secondary" data-copy="${i}" type="button">Copy details</button><button class="button button-quiet" data-text="${i}" type="button">Copy transcript</button></div>`;
-      resultsEl.appendChild(card);
+        <div class="clip-top"><div><div class="clip-number">CLIP OPPORTUNITY ${String(index+1).padStart(2,"0")}</div><h3>${escapeHTML(item.title)}</h3></div><div class="score">${item.score}<small>/ 100</small></div></div>
+        <div class="clip-meta"><span class="chip">▶ ${formatTime(item.start)} – ${formatTime(item.end)}</span><span class="chip">◷ ${Math.round(item.duration)} sec</span><span class="chip">${escapeHTML(latestMeta.platform || "Short-form")}</span></div>
+        <div class="clip-label">SOURCE EXCERPT</div><div class="clip-text">${escapeHTML(item.text)}</div>
+        <div class="clip-label">SUGGESTED HOOK</div><div class="clip-text">${escapeHTML(item.hook)}</div>
+        <div class="clip-label">CAPTION DRAFT</div><div class="clip-text">${escapeHTML(item.caption)}</div>
+        <div class="clip-footer"><button class="button button-secondary" data-copy="${index}" type="button">Copy clip pack</button><button class="button button-quiet" data-copy-text="${index}" type="button">Copy excerpt</button></div>`;
+      els.results.appendChild(card);
     });
-    resultsEl.querySelectorAll("[data-copy]").forEach(btn => btn.addEventListener("click", () => {
-      const x = results[Number(btn.dataset.copy)];
-      copyText(`ClipForge AI suggestion\nTime: ${fmt(x.start)} - ${fmt(x.end)}\nScore: ${x.score}/100\nTranscript: ${x.text}\nHook: ${makeHook(x.text)}\nTitle: ${makeTitle(x.text, Number(btn.dataset.copy))}\nCaption: ${makeCaption(makeTitle(x.text, Number(btn.dataset.copy)), $("platform").value)}`, btn);
+    els.results.querySelectorAll("[data-copy]").forEach(btn => btn.addEventListener("click", () => {
+      const r = latestResults[Number(btn.dataset.copy)];
+      copyText(`TITLE: ${r.title}\nTIMECODE: ${formatTime(r.start)} - ${formatTime(r.end)}\nSCORE: ${r.score}/100\nHOOK: ${r.hook}\nCAPTION:\n${r.caption}\n\nTRANSCRIPT:\n${r.text}`, btn, "Copy clip pack");
     }));
-    resultsEl.querySelectorAll("[data-text]").forEach(btn => btn.addEventListener("click", () => copyText(results[Number(btn.dataset.text)].text, btn)));
+    els.results.querySelectorAll("[data-copy-text]").forEach(btn => btn.addEventListener("click", () => copyText(latestResults[Number(btn.dataset.copyText)].text, btn, "Copy excerpt")));
   }
-  async function copyText(text, button) {
-    const old = button.textContent;
+  async function copyText(text, button, original) {
     try {
-      await navigator.clipboard.writeText(text);
+      if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+      else {
+        const temp = document.createElement("textarea"); temp.value = text; temp.style.position="fixed"; temp.style.opacity="0"; document.body.appendChild(temp); temp.select();
+        const ok = document.execCommand("copy"); temp.remove(); if (!ok) throw new Error("copy failed");
+      }
       button.textContent = "Copied ✓";
-    } catch {
-      const area = document.createElement("textarea");
-      area.value = text; document.body.appendChild(area); area.select();
-      document.execCommand("copy"); area.remove(); button.textContent = "Copied ✓";
-    }
-    setTimeout(() => button.textContent = old, 1400);
+      setTimeout(() => button.textContent = original, 1200);
+    } catch { setStatus("Copy failed in this browser. Select the text and copy it manually.", true); }
   }
-  $("loadSample").addEventListener("click", () => { transcriptEl.value = sample; $("error").hidden = true; });
-  $("analyze").addEventListener("click", () => {
-    const rows = parseTranscript(transcriptEl.value);
-    const error = $("error");
-    if (rows.length < 3) {
-      error.textContent = "Please add at least 3 timestamped transcript lines. Example: [00:12] This is what the speaker said.";
-      error.hidden = false; $("resultsSection").hidden = true; return;
+  function runAnalysis() {
+    const raw = els.transcript.value.trim();
+    if (!raw) { setStatus("Paste or import a transcript first.", true); els.transcript.focus(); return; }
+    const entries = parseTranscript(raw);
+    const timed = entries.filter(e => !e.untimed);
+    if (timed.length < 2) {
+      setStatus("I couldn't find enough timestamps. Use formats like [00:12] text or import an SRT/VTT file.", true);
+      return;
     }
-    const target = Number($("duration").value);
-    latestResults = buildCandidates(rows, target);
-    if (!latestResults.length) {
-      error.textContent = "Not enough time between timestamps to build clips of this length. Add more transcript lines or choose a shorter target.";
-      error.hidden = false; $("resultsSection").hidden = true; return;
-    }
-    error.hidden = true;
-    $("resultSummary").textContent = `Found ${latestResults.length} suggestions from ${rows.length} timestamped lines. Best matches appear first.`;
-    render(latestResults);
-    $("resultsSection").hidden = false;
-    $("resultsSection").scrollIntoView({ behavior: "smooth", block: "start" });
-  });
-  $("export").addEventListener("click", () => {
+    const target = Number(els.clipLength.value);
+    const platform = els.platform.value;
+    latestMeta = { name: els.name.value.trim() || "Untitled project", target, platform, sourceLines: timed.length, createdAt: new Date().toISOString() };
+    const results = findCandidates(entries, target, Number(els.maxClips.value), platform);
+    renderResults(results);
+    setStatus(`Analyzed ${timed.length} timestamped entries and found ${results.length} non-overlapping ideas. Review the original video for exact cut points.`);
+    if (!results.length) setStatus("Not enough transcript text for clip ideas. Add more timestamped lines.", true);
+  }
+  function download(filename, content, type) {
+    const blob = new Blob([content], {type});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function exportResults() {
     if (!latestResults.length) return;
-    const platform = $("platform").value;
-    const payload = latestResults.map((x, i) => ({ number: i+1, start: fmt(x.start), end: fmt(x.end), duration_seconds: Math.round(x.duration), heuristic_score: x.score, transcript: x.text, suggested_hook: makeHook(x.text), title: makeTitle(x.text, i), caption: makeCaption(makeTitle(x.text, i), platform), platform }));
-    const blob = new Blob([JSON.stringify({ app: "ClipForge AI", generated_at: new Date().toISOString(), note: "Heuristic suggestions, not predictions of performance.", clips: payload }, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "clipforge-suggestions.json"; a.click(); URL.revokeObjectURL(url);
+    download("clipforge-clip-ideas.json", JSON.stringify({ app:"ClipForge AI", version:2, project:latestMeta, clips:latestResults }, null, 2), "application/json");
+  }
+  function getProjects() {
+    try { const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); return Array.isArray(data) ? data : []; } catch { return []; }
+  }
+  function saveProject() {
+    const raw = els.transcript.value.trim();
+    if (!raw) { setStatus("Add a transcript before saving a project.", true); return; }
+    const projects = getProjects();
+    const project = { id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())), name: els.name.value.trim() || "Untitled project", transcript: raw, clipLength: els.clipLength.value, platform: els.platform.value, maxClips: els.maxClips.value, savedAt: new Date().toISOString() };
+    projects.unshift(project);
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(projects.slice(0,20))); renderSavedProjects(); setStatus("Project saved locally on this device."); }
+    catch { setStatus("Could not save. Browser storage may be full or disabled.", true); }
+  }
+  function renderSavedProjects() {
+    const projects = getProjects();
+    els.projects.innerHTML = "";
+    if (!projects.length) { els.projects.innerHTML = '<p class="muted small">No saved projects yet.</p>'; return; }
+    projects.forEach(project => {
+      const row = document.createElement("div"); row.className = "saved-item";
+      const date = project.savedAt ? new Date(project.savedAt).toLocaleDateString() : "";
+      row.innerHTML = `<div><strong>${escapeHTML(project.name)}</strong><span>${escapeHTML(date)} · ${project.transcript.split(/\s+/).length} transcript items</span></div><div class="saved-item-actions"><button type="button" data-load="${escapeHTML(project.id)}">Load</button><button type="button" data-delete="${escapeHTML(project.id)}">Delete</button></div>`;
+      els.projects.appendChild(row);
+    });
+    els.projects.querySelectorAll("[data-load]").forEach(btn => btn.addEventListener("click", () => {
+      const p = getProjects().find(p => p.id === btn.dataset.load); if (!p) return;
+      els.name.value=p.name; els.transcript.value=p.transcript; els.clipLength.value=p.clipLength || "30"; els.platform.value=p.platform || "YouTube Shorts"; els.maxClips.value=p.maxClips || "5";
+      latestResults=[]; els.results.innerHTML=""; els.empty.hidden=false; els.export.disabled=true;
+      setStatus("Project loaded. Run analysis to refresh clip ideas."); window.scrollTo({top:0,behavior:"smooth"});
+    }));
+    els.projects.querySelectorAll("[data-delete]").forEach(btn => btn.addEventListener("click", () => {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(getProjects().filter(p => p.id !== btn.dataset.delete))); renderSavedProjects();
+    }));
+  }
+  async function importFile(file) {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { setStatus("Please choose a transcript file smaller than 5 MB.", true); return; }
+    try {
+      els.transcript.value = await file.text();
+      els.fileStatus.textContent = `Imported ${file.name}`;
+      if (!els.name.value.trim()) els.name.value = file.name.replace(/\.[^.]+$/, "");
+      setStatus("Transcript imported. Run analysis to find clip opportunities.");
+    } catch { setStatus("Could not read that file. Try a plain-text SRT, VTT, or TXT file.", true); }
+  }
+  els.sample.addEventListener("click", () => { els.transcript.value=sampleText; els.name.value="Creator Tips — Sample"; els.fileStatus.textContent="Sample loaded"; setStatus("Sample loaded. Tap Find clip opportunities."); });
+  els.file.addEventListener("change", () => importFile(els.file.files && els.file.files[0]));
+  els.analyze.addEventListener("click", runAnalysis);
+  els.export.addEventListener("click", exportResults);
+  els.save.addEventListener("click", saveProject);
+  els.clear.addEventListener("click", () => {
+    if (!getProjects().length) return;
+    if (confirm("Delete all locally saved ClipForge projects from this browser?")) { localStorage.removeItem(STORAGE_KEY); renderSavedProjects(); setStatus("Saved projects cleared from this browser."); }
   });
-  transcriptEl.value = sample;
+  renderSavedProjects();
 })();
