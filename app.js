@@ -1,3 +1,6 @@
+import { terms, genericTerms, SUPPORTED_LANGS } from "./terms.js";
+import { detectLanguage } from "./languageDetector.js";
+
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
@@ -72,29 +75,27 @@
       } else if (entries.length) {
         entries[entries.length - 1].text += " " + stripTags(line);
       } else {
-        // Keep untimed lines available but flag that timestamps are missing.
         entries.push({ time: 0, text: stripTags(line), untimed: true });
       }
     }
     return entries.filter(e => e.text && e.text.length > 1).sort((a,b) => a.time - b.time);
   }
 
-  const terms = {
-    question: /\?|\b(what|why|how|who|when|where|which|ever wondered|ask yourself)\b/i,
-    emotion: /\b(shocking|surprising|scary|crazy|love|hate|fear|mistake|fail|win|changed|secret|worst|best|amazing|terrible|never|nobody|everyone|finally|breakthrough)\b/i,
-    hook: /\b(here'?s|this is|the truth|the biggest|one thing|let me tell you|listen|stop|if you|most people|nobody tells you|the reason)\b/i,
-    payoff: /\b(because|so|that means|the result|which is why|in the end|here'?s why|that'?s how|lesson|changed)\b/i,
-    number: /\b\d+\b/
-  };
-  function scoreText(text, duration, target) {
+  /** Pick keyword set based on detected language, with generic fallback. */
+  function resolveTerms(lang) {
+    if (SUPPORTED_LANGS.includes(lang) && terms[lang]) return terms[lang];
+    return genericTerms;
+  }
+
+  function scoreText(text, duration, target, activeTerms) {
     const words = text.trim().split(/\s+/).filter(Boolean);
-    const sentenceCount = (text.match(/[.!?]+/g) || []).length;
+    const sentenceCount = (text.match(/[.!?؟]+/g) || []).length;
     let score = 35;
-    if (terms.question.test(text)) score += 10;
-    if (terms.emotion.test(text)) score += 13;
-    if (terms.hook.test(text)) score += 15;
-    if (terms.payoff.test(text)) score += 8;
-    if (terms.number.test(text)) score += 4;
+    if (activeTerms.question && activeTerms.question.test(text)) score += 10;
+    if (activeTerms.emotion && activeTerms.emotion.test(text)) score += 13;
+    if (activeTerms.hook && activeTerms.hook.test(text)) score += 15;
+    if (activeTerms.payoff && activeTerms.payoff.test(text)) score += 8;
+    if (activeTerms.number && activeTerms.number.test(text)) score += 4;
     if (sentenceCount >= 1 && sentenceCount <= 4) score += 5;
     if (words.length >= 18 && words.length <= 95) score += 8;
     if (words.length < 8) score -= 13;
@@ -103,15 +104,25 @@
     if (duration > 0 && duration < 10) score -= 5;
     return Math.max(20, Math.min(96, Math.round(score)));
   }
+
   function titleFor(text) {
     const cleaned = text.replace(/\s+/g," ").trim();
-    const first = cleaned.split(/[.!?]/)[0].trim();
+    const first = cleaned.split(/[.!?؟]/)[0].trim();
     let title = first.length > 68 ? first.slice(0,65).replace(/\s+\S*$/,"") + "…" : first;
     if (!title || title.length < 8) title = cleaned.slice(0,64);
     return title.replace(/^["'“”]+|["'“”]+$/g,"");
   }
-  function hookFor(text) {
+
+  /** Hook templates — currently English UI, but adapt punctuation to source language. */
+  function hookFor(text, lang) {
     const t = text.replace(/\s+/g," ").trim();
+    if (lang === "ar") {
+      if (/\b(إذا كنت|عندما|قبل أن)\b/.test(t)) return "قبل أن تمرر، اسمع هذا: " + shorten(t, 90);
+      if (/[?؟]/.test(t)) return shorten(t, 105);
+      if (/\b(خطأ|غلط|أسوأ|أبداً)\b/.test(t)) return "الخطأ الذي يفوته معظم الناس: " + shorten(t, 78);
+      if (/\b(مفاجئ|سر|لا أحد|الحقيقة|أكبر)\b/.test(t)) return "لا أحد يتحدث عن هذا بما يكفي: " + shorten(t, 78);
+      return "إليك الخلاصة الأساسية: " + shorten(t, 82);
+    }
     if (/\b(if you|when you|before you)\b/i.test(t)) return "Before you scroll, hear this: " + shorten(t, 90);
     if (/\?/.test(t)) return shorten(t, 105);
     if (/\b(mistake|wrong|worst|never)\b/i.test(t)) return "The mistake most people miss: " + shorten(t, 78);
@@ -119,12 +130,14 @@
     return "Here's the key takeaway: " + shorten(t, 82);
   }
   function shorten(s, n) { return s.length > n ? s.slice(0,n-1).replace(/\s+\S*$/,"") + "…" : s; }
-  function captionFor(title, platform) {
+  function captionFor(title, platform, lang) {
     const tag = platform === "YouTube Shorts" ? "#Shorts" : platform === "Instagram Reels" ? "#Reels" : platform === "TikTok" ? "#TikTok" : "#Shorts #Reels";
-    return `${title}\n\nWhat do you think? Share your take below.\n\n${tag} #CreatorTips`;
+    const cta = lang === "ar" ? "ما رأيك؟ شاركنا تعليقك أدناه." : "What do you think? Share your take below.";
+    return `${title}\n\n${cta}\n\n${tag} #CreatorTips`;
   }
 
-  function findCandidates(entries, target, maxClips, platform) {
+  function findCandidates(entries, target, maxClips, platform, lang) {
+    const activeTerms = resolveTerms(lang);
     const candidates = [];
     for (let i = 0; i < entries.length; i++) {
       const start = entries[i].time;
@@ -138,12 +151,16 @@
       const text = chosen.map(e => e.text).join(" ").replace(/\s+/g," ").trim();
       if (text.split(/\s+/).length < 7) continue;
       const duration = Math.max(1, end - start);
-      let score = scoreText(text, duration, target);
-      // Favor self-contained passages with an opening cue and a concluding cue.
+      let score = scoreText(text, duration, target, activeTerms);
       if (chosen.length >= 2) score += 2;
-      if (/[.!?]["')\]]?$/.test(text)) score += 2;
+      if (/[.!?؟]["')\]]?$/.test(text)) score += 2;
       score = Math.min(98, score);
-      candidates.push({ start, end, duration, text, score, title: titleFor(text), hook: hookFor(text), caption: captionFor(titleFor(text), platform) });
+      const ttl = titleFor(text);
+      candidates.push({
+        start, end, duration, text, score, title: ttl,
+        hook: hookFor(text, lang),
+        caption: captionFor(ttl, platform, lang),
+      });
     }
     candidates.sort((a,b) => b.score - a.score || a.start - b.start);
     const picked = [];
@@ -158,6 +175,7 @@
   function escapeHTML(s) {
     return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
   }
+
   function renderResults(results) {
     latestResults = results;
     els.results.innerHTML = "";
@@ -169,7 +187,7 @@
       card.className = "clip-card";
       card.innerHTML = `
         <div class="clip-top"><div><div class="clip-number">CLIP OPPORTUNITY ${String(index+1).padStart(2,"0")}</div><h3>${escapeHTML(item.title)}</h3></div><div class="score">${item.score}<small>/ 100</small></div></div>
-        <div class="clip-meta"><span class="chip">▶ ${formatTime(item.start)} – ${formatTime(item.end)}</span><span class="chip">◷ ${Math.round(item.duration)} sec</span><span class="chip">${escapeHTML(latestMeta.platform || "Short-form")}</span></div>
+        <div class="clip-meta"><span class="chip">▶ ${formatTime(item.start)} – ${formatTime(item.end)}</span><span class="chip">◷ ${Math.round(item.duration)} sec</span><span class="chip">${escapeHTML(latestMeta.platform || "Short-form")}</span><span class="chip">🌐 ${escapeHTML((latestMeta.lang || "en").toUpperCase())}</span></div>
         <div class="clip-label">SOURCE EXCERPT</div><div class="clip-text">${escapeHTML(item.text)}</div>
         <div class="clip-label">SUGGESTED HOOK</div><div class="clip-text">${escapeHTML(item.hook)}</div>
         <div class="clip-label">CAPTION DRAFT</div><div class="clip-text">${escapeHTML(item.caption)}</div>
@@ -182,6 +200,7 @@
     }));
     els.results.querySelectorAll("[data-copy-text]").forEach(btn => btn.addEventListener("click", () => copyText(latestResults[Number(btn.dataset.copyText)].text, btn, "Copy excerpt")));
   }
+
   async function copyText(text, button, original) {
     try {
       if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
@@ -193,6 +212,7 @@
       setTimeout(() => button.textContent = original, 1200);
     } catch { setStatus("Copy failed in this browser. Select the text and copy it manually.", true); }
   }
+
   function runAnalysis() {
     const raw = els.transcript.value.trim();
     if (!raw) { setStatus("Paste or import a transcript first.", true); els.transcript.focus(); return; }
@@ -202,14 +222,23 @@
       setStatus("I couldn't find enough timestamps. Use formats like [00:12] text or import an SRT/VTT file.", true);
       return;
     }
+    // Auto-detect the transcript language (also works when pasted manually).
+    const fullText = timed.map(e => e.text).join(" ");
+    const lang = detectLanguage(fullText);
     const target = Number(els.clipLength.value);
     const platform = els.platform.value;
-    latestMeta = { name: els.name.value.trim() || "Untitled project", target, platform, sourceLines: timed.length, createdAt: new Date().toISOString() };
-    const results = findCandidates(entries, target, Number(els.maxClips.value), platform);
+    latestMeta = {
+      name: els.name.value.trim() || "Untitled project",
+      target, platform, lang,
+      sourceLines: timed.length,
+      createdAt: new Date().toISOString(),
+    };
+    const results = findCandidates(entries, target, Number(els.maxClips.value), platform, lang);
     renderResults(results);
-    setStatus(`Analyzed ${timed.length} timestamped entries and found ${results.length} non-overlapping ideas. Review the original video for exact cut points.`);
+    setStatus(`Analyzed ${timed.length} timestamped entries · detected language: ${lang.toUpperCase()} · found ${results.length} non-overlapping ideas. Review the original video for exact cut points.`);
     if (!results.length) setStatus("Not enough transcript text for clip ideas. Add more timestamped lines.", true);
   }
+
   function download(filename, content, type) {
     const blob = new Blob([content], {type});
     const url = URL.createObjectURL(blob);
@@ -218,8 +247,9 @@
   }
   function exportResults() {
     if (!latestResults.length) return;
-    download("clipforge-clip-ideas.json", JSON.stringify({ app:"ClipForge AI", version:2, project:latestMeta, clips:latestResults }, null, 2), "application/json");
+    download("clipforge-clip-ideas.json", JSON.stringify({ app:"ClipForge AI", version:3, project:latestMeta, clips:latestResults }, null, 2), "application/json");
   }
+
   function getProjects() {
     try { const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); return Array.isArray(data) ? data : []; } catch { return []; }
   }
@@ -227,11 +257,20 @@
     const raw = els.transcript.value.trim();
     if (!raw) { setStatus("Add a transcript before saving a project.", true); return; }
     const projects = getProjects();
-    const project = { id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())), name: els.name.value.trim() || "Untitled project", transcript: raw, clipLength: els.clipLength.value, platform: els.platform.value, maxClips: els.maxClips.value, savedAt: new Date().toISOString() };
+    const project = {
+      id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())),
+      name: els.name.value.trim() || "Untitled project",
+      transcript: raw,
+      clipLength: els.clipLength.value,
+      platform: els.platform.value,
+      maxClips: els.maxClips.value,
+      savedAt: new Date().toISOString(),
+    };
     projects.unshift(project);
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(projects.slice(0,20))); renderSavedProjects(); setStatus("Project saved locally on this device."); }
     catch { setStatus("Could not save. Browser storage may be full or disabled.", true); }
   }
+
   function renderSavedProjects() {
     const projects = getProjects();
     els.projects.innerHTML = "";
@@ -244,14 +283,20 @@
     });
     els.projects.querySelectorAll("[data-load]").forEach(btn => btn.addEventListener("click", () => {
       const p = getProjects().find(p => p.id === btn.dataset.load); if (!p) return;
-      els.name.value=p.name; els.transcript.value=p.transcript; els.clipLength.value=p.clipLength || "30"; els.platform.value=p.platform || "YouTube Shorts"; els.maxClips.value=p.maxClips || "5";
+      els.name.value=p.name; els.transcript.value=p.transcript;
+      els.clipLength.value=p.clipLength || "30";
+      els.platform.value=p.platform || "YouTube Shorts";
+      els.maxClips.value=p.maxClips || "5";
       latestResults=[]; els.results.innerHTML=""; els.empty.hidden=false; els.export.disabled=true;
-      setStatus("Project loaded. Run analysis to refresh clip ideas."); window.scrollTo({top:0,behavior:"smooth"});
+      setStatus("Project loaded. Run analysis to refresh clip ideas.");
+      window.scrollTo({top:0,behavior:"smooth"});
     }));
     els.projects.querySelectorAll("[data-delete]").forEach(btn => btn.addEventListener("click", () => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(getProjects().filter(p => p.id !== btn.dataset.delete))); renderSavedProjects();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(getProjects().filter(p => p.id !== btn.dataset.delete)));
+      renderSavedProjects();
     }));
   }
+
   async function importFile(file) {
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) { setStatus("Please choose a transcript file smaller than 5 MB.", true); return; }
@@ -262,14 +307,23 @@
       setStatus("Transcript imported. Run analysis to find clip opportunities.");
     } catch { setStatus("Could not read that file. Try a plain-text SRT, VTT, or TXT file.", true); }
   }
-  els.sample.addEventListener("click", () => { els.transcript.value=sampleText; els.name.value="Creator Tips — Sample"; els.fileStatus.textContent="Sample loaded"; setStatus("Sample loaded. Tap Find clip opportunities."); });
+
+  els.sample.addEventListener("click", () => {
+    els.transcript.value=sampleText;
+    els.name.value="Creator Tips — Sample";
+    els.fileStatus.textContent="Sample loaded";
+    setStatus("Sample loaded. Tap Find clip opportunities.");
+  });
   els.file.addEventListener("change", () => importFile(els.file.files && els.file.files[0]));
   els.analyze.addEventListener("click", runAnalysis);
   els.export.addEventListener("click", exportResults);
   els.save.addEventListener("click", saveProject);
   els.clear.addEventListener("click", () => {
     if (!getProjects().length) return;
-    if (confirm("Delete all locally saved ClipForge projects from this browser?")) { localStorage.removeItem(STORAGE_KEY); renderSavedProjects(); setStatus("Saved projects cleared from this browser."); }
+    if (confirm("Delete all locally saved ClipForge projects from this browser?")) {
+      localStorage.removeItem(STORAGE_KEY); renderSavedProjects();
+      setStatus("Saved projects cleared from this browser.");
+    }
   });
   renderSavedProjects();
 })();
